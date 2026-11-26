@@ -117,6 +117,12 @@ func (c *config) taskDir(task string) string {
 	return filepath.Join(c.root, "codingbench", "tasks", task)
 }
 
+// portFolder is the folder of an agent's CX port. cx takes the folder rather
+// than its files, which keeps the command line short enough for cx.wasm.
+func (c *config) portFolder(agent string) string {
+	return filepath.Join(c.root, agent, "port")
+}
+
 func record(c *config) error {
 	if err := c.check(); err != nil {
 		return err
@@ -184,12 +190,8 @@ func recordOne(c *config, task, agent string) (result, error) {
 	if err != nil {
 		return r, err
 	}
-	ports, err := filepath.Glob(filepath.Join(c.root, agent, "port", "*.cx"))
-	if err != nil {
-		return r, err
-	}
-	args := append(append([]string{cxEnable}, ports...), "++mode=record", "++tape=tape.txt", "++inbound=inbound.txt",
-		"++client="+c.backendstore, "++backend="+store.url)
+	args := []string{cxEnable, c.portFolder(agent), "++mode=record", "++tape=tape.txt", "++inbound=inbound.txt",
+		"++client=" + c.backendstore, "++backend=" + store.url}
 	start := time.Now()
 	output, runErr := runIn(work, c.cx, args...)
 	r.wall = time.Since(start)
@@ -263,12 +265,8 @@ func replayOne(c *config, task, agent, saveDir string) (result, error) {
 	if err := setupFiles(c.taskDir(task), filepath.Join(work, "spiffs")); err != nil {
 		return r, err
 	}
-	ports, err := filepath.Glob(filepath.Join(c.root, agent, "port", "*.cx"))
-	if err != nil {
-		return r, err
-	}
 	start := time.Now()
-	output, err := runIn(work, c.cx, append(append([]string{cxEnable}, ports...), "++mode=replay", "++tape=tape.txt", "++apply=1")...)
+	output, err := runIn(work, c.cx, cxEnable, c.portFolder(agent), "++mode=replay", "++tape=tape.txt", "++apply=1")
 	r.wall = time.Since(start)
 	if err != nil {
 		return r, fmt.Errorf("port replay: %v: %s", err, lastLine(output))
