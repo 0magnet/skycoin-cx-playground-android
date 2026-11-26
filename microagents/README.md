@@ -102,6 +102,12 @@ SKYCOIN_CX_DIR=~/go/src/github.com/skycoin/skycoin-cx ./run-tests.sh
 a C compiler and libcjson. `TESTS='zclaw/tests/pair-*'` runs a subset of the
 test folders.
 
+`CX=testlib/cx-wasm.sh CX_WASM=/path/to/cx.wasm` runs every test on cx built
+for js/wasm, under Node with the Go toolchain's `wasm_exec_node.js`. The
+tests pass cx the port folder rather than its files, since js/wasm limits
+the arguments and the environment together to 12 KB. All 264 checks pass
+this way with cx.wasm of skycoin-cx v0.9.0-alpha1.
+
 | Test | What passes |
 |---|---|
 | port-layout | R13: every port file holds one function, type or constant group, and uses only names from files that sort before it |
