@@ -58,7 +58,7 @@ func executorFailureDescribe(prgrm *ast.CXProgram, failure lower.Failure) string
 			description += " " + row.Name
 		}
 	}
-	return description + " in " + prgrm.CXProgramNameText(prgrm.CXFunctions[failure.FailureFunction].Name)
+	return description + " in " + prgrm.CXProgramNameText(prgrm.CxIrState.CXFunctionMng.CXFunctionGet(prgrm.CXProgramFunctionSlotGid(failure.FailureFunction)).Name)
 }
 
 // ExecutorVmRun runs image on vm as execute.RunCompiled and runProgram run
@@ -132,12 +132,13 @@ func ExecutorMemoryLimitsClamp() {
 // returns the exit code, after printing any runtime error.
 func ExecutorRun(prgrm *ast.CXProgram, executor string, cxArgs []string) int32 {
 	CoreLibrariesEnabledResolve(prgrm)
-	for library, start := range ast.LibraryRunStarts {
-		if start == nil || !prgrm.ProgramLibrariesEnabled[library] {
-			continue
-		}
-		if err := start(); err != nil {
-			fmt.Fprintf(os.Stderr, "library %s: %s\n", constants.LibraryNameOf(library), err)
+	if code := CoreOperationRefused(prgrm); code != 0 {
+		fmt.Println(CoreOperationRefusalLine(prgrm, code))
+		return types.CX_RUNTIME_LIBRARY_DISABLED
+	}
+	if CoreLibrariesActive(prgrm)[constants.LibraryNumberNet] {
+		if err := executorNetRunStart(); err != nil {
+			fmt.Fprintf(os.Stderr, "library %s: %s\n", constants.LibraryNameOf(constants.LibraryNumberNet), err)
 			return types.CX_INTERNAL_ERROR
 		}
 	}

@@ -156,7 +156,6 @@ func serializeUnusedManagersCheck(state *CxIrState) error {
 	}{
 		{CXProgramGidTypeTag, state.CXProgramMng.CXProgramMngNext != 0},
 		{CXPackageGidTypeTag, state.CXPackageMng.CXPackageMngNext != 0},
-		{CXFunctionGidTypeTag, state.CXFunctionMng.CXFunctionMngNext != 0},
 		{CXNativeFunctionGidTypeTag, state.CXNativeFunctionMng.CXNativeFunctionMngNext != 0},
 		{CXStructGidTypeTag, state.CXStructMng.CXStructMngNext != 0},
 		{CXExpressionGidTypeTag, state.CXExpressionMng.CXExpressionMngNext != 0},
@@ -415,17 +414,14 @@ func serializeProgramFields(prgrm *CXProgram, encoder *serializeEncoder) error {
 	encoder.serializeEncoderPointer(prgrm.CallCounter)
 	encoder.serializeEncoderUint(uint64(used))
 	for _, call := range prgrm.CallStack[:used] {
-		operator := int64(-1)
-		if call.Operator != nil {
-			operator = int64(call.Operator.Index)
-		}
-		encoder.serializeEncoderInt(operator)
+		encoder.serializeEncoderInt(int64(call.Operator))
 		encoder.serializeEncoderInt(int64(call.Line))
 		encoder.serializeEncoderPointer(call.FramePointer)
 	}
 	encoder.serializeEncoderBool(prgrm.Terminated)
 	serializeLibraries(encoder, &prgrm.ProgramLibrariesUsed)
 	serializeLibraries(encoder, &prgrm.ProgramLibrariesEnabled)
+	serializeOpcodeSet(encoder, &prgrm.ProgramOperationsEnabled)
 
 	encoder.serializeEncoderLength(len(prgrm.SysInitExprs), prgrm.SysInitExprs == nil)
 	for i := range prgrm.SysInitExprs {
@@ -484,6 +480,7 @@ func deserializeProgramFields(prgrm *CXProgram, decoder *serializeDecoder) []ser
 	prgrm.Terminated = decoder.serializeDecoderBool()
 	deserializeLibraries(decoder, &prgrm.ProgramLibrariesUsed)
 	deserializeLibraries(decoder, &prgrm.ProgramLibrariesEnabled)
+	deserializeOpcodeSet(decoder, &prgrm.ProgramOperationsEnabled)
 
 	if length := decoder.serializeDecoderLength(5); length >= 0 {
 		prgrm.SysInitExprs = make([]CXExpression, length)
@@ -502,16 +499,12 @@ func deserializeCallStack(prgrm *CXProgram, decoder *serializeDecoder, calls []s
 		return
 	}
 	for i, call := range calls {
-		operator := call.serializeCallReferenceOperator
-		if operator < -1 || operator >= int64(len(prgrm.CXFunctions)) {
-			decoder.serializeDecoderFailf("call %d names function %d of %d", i, operator, len(prgrm.CXFunctions))
+		operator := CXFunctionGid(call.serializeCallReferenceOperator)
+		if !serializeFunctionGidValid(prgrm, operator) {
+			decoder.serializeDecoderFailf("call %d names function %#x, which is not live", i, int64(operator))
 			return
 		}
-		if operator >= 0 {
-			// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-			// Now a pointer into an arena, as the call stack holds it.
-			prgrm.CallStack[i].Operator = &prgrm.CXFunctions[operator]
-		}
+		prgrm.CallStack[i].Operator = operator
 		prgrm.CallStack[i].Line = call.serializeCallReferenceLine
 		prgrm.CallStack[i].FramePointer = call.serializeCallReferenceFramePointer
 	}
@@ -607,32 +600,35 @@ func deserializeStringGid(decoder *serializeDecoder, pool *stringpool.StringPool
 func serializePackages(prgrm *CXProgram, encoder *serializeEncoder) error {
 	encoder.serializeEncoderLength(len(prgrm.CXPackages), prgrm.CXPackages == nil)
 	for i := range prgrm.CXPackages {
-		pkg := &prgrm.CXPackages[i]
-		encoder.serializeEncoderInt(int64(pkg.Name))
-		encoder.serializeEncoderInt(int64(pkg.Index))
-		serializeNameMap(encoder, pkg.Imports)
-		serializeNameMap(encoder, pkg.Functions)
-		serializeNameMap(encoder, pkg.Structs)
-		keys := make([]CXPackageMethodKey, 0, len(pkg.Methods))
-		for key := range pkg.Methods {
-			keys = append(keys, key)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if keys[i].CXPackageMethodKeyStruct != keys[j].CXPackageMethodKeyStruct {
-				return keys[i].CXPackageMethodKeyStruct < keys[j].CXPackageMethodKeyStruct
-			}
-			return keys[i].CXPackageMethodKeyMethod < keys[j].CXPackageMethodKeyMethod
-		})
-		encoder.serializeEncoderLength(len(keys), pkg.Methods == nil)
-		for _, key := range keys {
-			encoder.serializeEncoderInt(int64(key.CXPackageMethodKeyStruct))
-			encoder.serializeEncoderInt(int64(key.CXPackageMethodKeyMethod))
-			encoder.serializeEncoderInt(int64(pkg.Methods[key]))
-		}
-		serializeOwnedStruct(encoder, pkg.Globals)
-		encoder.serializeEncoderInt(int64(pkg.CurrentFunction))
+		serializePackage(encoder, &prgrm.CXPackages[i])
 	}
 	return nil
+}
+
+func serializePackage(encoder *serializeEncoder, pkg *CXPackage) {
+	encoder.serializeEncoderInt(int64(pkg.Name))
+	encoder.serializeEncoderInt(int64(pkg.Index))
+	serializeNameMap(encoder, pkg.Imports)
+	serializeNameMap(encoder, pkg.Functions)
+	serializeNameMap(encoder, pkg.Structs)
+	keys := make([]CXPackageMethodKey, 0, len(pkg.Methods))
+	for key := range pkg.Methods {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].CXPackageMethodKeyStruct != keys[j].CXPackageMethodKeyStruct {
+			return keys[i].CXPackageMethodKeyStruct < keys[j].CXPackageMethodKeyStruct
+		}
+		return keys[i].CXPackageMethodKeyMethod < keys[j].CXPackageMethodKeyMethod
+	})
+	encoder.serializeEncoderLength(len(keys), pkg.Methods == nil)
+	for _, key := range keys {
+		encoder.serializeEncoderInt(int64(key.CXPackageMethodKeyStruct))
+		encoder.serializeEncoderInt(int64(key.CXPackageMethodKeyMethod))
+		encoder.serializeEncoderInt(int64(pkg.Methods[key]))
+	}
+	serializeOwnedStruct(encoder, pkg.Globals)
+	encoder.serializeEncoderInt(int64(pkg.CurrentFunction))
 }
 
 func deserializePackages(prgrm *CXProgram, decoder *serializeDecoder) {
@@ -647,25 +643,25 @@ func deserializePackages(prgrm *CXProgram, decoder *serializeDecoder) {
 		pkg := &prgrm.CXPackages[i]
 		pkg.Name = stringpool.StringGid(decoder.serializeDecoderInt())
 		pkg.Index = decoder.serializeDecoderIntValue()
-		pkg.Imports = deserializeNameMap[CXPackageIndex](decoder)
-		pkg.Functions = deserializeNameMap[CXFunctionIndex](decoder)
-		pkg.Structs = deserializeNameMap[CXStructIndex](decoder)
+		pkg.Imports = deserializeNameMap(decoder, func() CXPackageIndex { return CXPackageIndex(decoder.serializeDecoderIntValue()) })
+		pkg.Functions = deserializeNameMap(decoder, func() CXFunctionGid { return CXFunctionGid(decoder.serializeDecoderInt()) })
+		pkg.Structs = deserializeNameMap(decoder, func() CXStructIndex { return CXStructIndex(decoder.serializeDecoderIntValue()) })
 		if count := decoder.serializeDecoderLength(3); count >= 0 {
-			pkg.Methods = make(map[CXPackageMethodKey]CXFunctionIndex, count)
+			pkg.Methods = make(map[CXPackageMethodKey]CXFunctionGid, count)
 			for j := 0; j < count; j++ {
 				var key CXPackageMethodKey
 				key.CXPackageMethodKeyStruct = stringpool.StringGid(decoder.serializeDecoderInt())
 				key.CXPackageMethodKeyMethod = stringpool.StringGid(decoder.serializeDecoderInt())
-				pkg.Methods[key] = CXFunctionIndex(decoder.serializeDecoderIntValue())
+				pkg.Methods[key] = CXFunctionGid(decoder.serializeDecoderInt())
 			}
 		}
 		pkg.Globals = deserializeOwnedStruct(decoder)
-		pkg.CurrentFunction = CXFunctionIndex(decoder.serializeDecoderIntValue())
+		pkg.CurrentFunction = CXFunctionGid(decoder.serializeDecoderInt())
 	}
 }
 
 // serializeNameMap writes a map from names to indexes in name Gid order.
-func serializeNameMap[Index ~int](encoder *serializeEncoder, names map[stringpool.StringGid]Index) {
+func serializeNameMap[Index ~int | ~int64](encoder *serializeEncoder, names map[stringpool.StringGid]Index) {
 	keys := make([]stringpool.StringGid, 0, len(names))
 	for key := range names {
 		keys = append(keys, key)
@@ -678,7 +674,7 @@ func serializeNameMap[Index ~int](encoder *serializeEncoder, names map[stringpoo
 	}
 }
 
-func deserializeNameMap[Index ~int](decoder *serializeDecoder) map[stringpool.StringGid]Index {
+func deserializeNameMap[Index ~int | ~int64](decoder *serializeDecoder, valueDecode func() Index) map[stringpool.StringGid]Index {
 	length := decoder.serializeDecoderLength(2)
 	if length < 0 {
 		return nil
@@ -686,7 +682,7 @@ func deserializeNameMap[Index ~int](decoder *serializeDecoder) map[stringpool.St
 	names := make(map[stringpool.StringGid]Index, length)
 	for i := 0; i < length; i++ {
 		key := stringpool.StringGid(decoder.serializeDecoderInt())
-		names[key] = Index(decoder.serializeDecoderIntValue())
+		names[key] = valueDecode()
 	}
 	return names
 }
@@ -718,13 +714,13 @@ func deserializeStructs(prgrm *CXProgram, decoder *serializeDecoder) {
 //                     Functions section
 
 func serializeFunctions(prgrm *CXProgram, encoder *serializeEncoder) error {
-	encoder.serializeEncoderLength(len(prgrm.CXFunctions), prgrm.CXFunctions == nil)
-	for i := range prgrm.CXFunctions {
-		if err := serializeFunction(prgrm, encoder, &prgrm.CXFunctions[i]); err != nil {
-			return err
-		}
-	}
-	return nil
+	manager := &prgrm.CxIrState.CXFunctionMng
+	return serializeManager(encoder, manager.CXFunctionMngObjects, serializeManagerSlots{
+		len(manager.CXFunctionMngObjects), manager.CXFunctionMngGenerations, manager.CXFunctionMngLive, manager.CXFunctionMngFree,
+		manager.CXFunctionMngNext, manager.CXFunctionMngRetired, manager.CXFunctionMngLen, manager.CXFunctionMngGrowable,
+	}, func(fn *CXFunction) error {
+		return serializeFunction(prgrm, encoder, fn)
+	})
 }
 
 // GCREACH: writes the GC root tables ListOfPointers and ListOfSlots,
@@ -780,16 +776,17 @@ func serializeFunction(prgrm *CXProgram, encoder *serializeEncoder, fn *CXFuncti
 	return nil
 }
 
+// VIOLATION STRHOT-353: B, the serializer, compiler code run by an opcode, #412.
 func deserializeFunctions(prgrm *CXProgram, decoder *serializeDecoder) {
-	length := decoder.serializeDecoderLength(16)
-	if length < 0 {
+	objects, slots := deserializeManager(decoder, "CXFunctionMng", func(fn *CXFunction) {
+		deserializeFunction(prgrm, decoder, fn)
+	})
+	if decoder.serializeDecoderError != nil {
 		return
 	}
-	// OBJMODEL: state.CXFunctionMng (manager storage) or []CXFunctionGid, phase 4 #351.
-	// Now a slice of objects, the arena of a compiled program.
-	prgrm.CXFunctions = make([]CXFunction, length)
-	for i := range prgrm.CXFunctions {
-		deserializeFunction(prgrm, decoder, &prgrm.CXFunctions[i])
+	prgrm.CxIrState.CXFunctionMng = CXFunctionMng{
+		objects, slots.serializeManagerSlotsGenerations, slots.serializeManagerSlotsLive, slots.serializeManagerSlotsFree,
+		slots.serializeManagerSlotsNext, slots.serializeManagerSlotsRetired, slots.serializeManagerSlotsLen, slots.serializeManagerSlotsGrowable,
 	}
 }
 
@@ -917,8 +914,12 @@ func deserializeExpressions(prgrm *CXProgram, decoder *serializeDecoder) {
 			op := &prgrm.CXAtomicOps[i]
 			op.Inputs = deserializeOwnedStruct(decoder)
 			op.Outputs = deserializeOwnedStruct(decoder)
-			op.Operator = CXFunctionIndex(decoder.serializeDecoderIntValue())
-			op.Function = CXFunctionIndex(decoder.serializeDecoderIntValue())
+			op.Operator = CXFunctionGid(decoder.serializeDecoderInt())
+			op.Function = CXFunctionGid(decoder.serializeDecoderInt())
+			if !serializeFunctionGidValid(prgrm, op.Operator) || !serializeFunctionGidValid(prgrm, op.Function) {
+				decoder.serializeDecoderFailf("expression %d names function %#x or %#x, which is not live", i, int64(op.Operator), int64(op.Function))
+				return
+			}
 			op.Package = CXPackageIndex(decoder.serializeDecoderIntValue())
 			op.Label = stringpool.StringGid(decoder.serializeDecoderInt())
 			op.ThenLines = decoder.serializeDecoderIntValue()
@@ -1229,4 +1230,37 @@ func deserializeLibraries(decoder *serializeDecoder, libraries *[constants.Libra
 	for library := range libraries {
 		libraries[library] = decoder.serializeDecoderBool()
 	}
+}
+
+// serializeOpcodeSet writes set as its number of words and the words.
+func serializeOpcodeSet(encoder *serializeEncoder, set *constants.OpcodeSet) {
+	encoder.serializeEncoderUint(uint64(len(set)))
+	for _, word := range set {
+		encoder.serializeEncoderUint(word)
+	}
+}
+
+// deserializeOpcodeSet reads a set that serializeOpcodeSet wrote. A program
+// with another opcode table size fails.
+// VIOLATION STRHOT-351: B, the serializer, compiler code run by an opcode, #412.
+func deserializeOpcodeSet(decoder *serializeDecoder, set *constants.OpcodeSet) {
+	if count := decoder.serializeDecoderUint(); decoder.serializeDecoderError == nil && count != uint64(len(set)) {
+		decoder.serializeDecoderFailf("an opcode set of %d words, this cx has %d", count, len(set))
+		return
+	}
+	for word := range set {
+		set[word] = decoder.serializeDecoderUint()
+	}
+}
+
+// serializeFunctionGidValid reports whether gid is CXFunctionGidNil or names
+// a live function of prgrm, the checks CXFunctionGet asserts.
+func serializeFunctionGidValid(prgrm *CXProgram, gid CXFunctionGid) bool {
+	if gid == CXFunctionGidNil {
+		return true
+	}
+	manager := &prgrm.CxIrState.CXFunctionMng
+	index := objmodel.GidIndex(int64(gid))
+	return objmodel.GidTypeTag(int64(gid)) == CXFunctionGidTypeTag && index < manager.CXFunctionMngNext &&
+		manager.CXFunctionMngLive[index] && manager.CXFunctionMngGenerations[index] == objmodel.GidGeneration(int64(gid))
 }

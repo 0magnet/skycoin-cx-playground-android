@@ -91,9 +91,7 @@ func sliceLiteralExpressionOf(prgrm *ast.CXProgram, typeCode types.Code, strct *
 		if err != nil {
 			panic(err)
 		}
-		// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-		// Now an arena getter, site S0985.
-		exprAtomicOpOperator := prgrm.GetFunctionFromArray(exprAtomicOp.Operator)
+		exprAtomicOpOperator := prgrm.CxIrState.CxIrStateFunctionGetOrNil(exprAtomicOp.Operator)
 
 		exprCXLine, _ := prgrm.GetPreviousCXLine(exprs, i)
 
@@ -135,8 +133,6 @@ func sliceLiteralExpressionOf(prgrm *ast.CXProgram, typeCode types.Code, strct *
 
 			if exprAtomicOpOperator == nil {
 				// then it's a literal
-				// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-				// Now an arena insert, site S0991.
 				opIdx := prgrm.AddNativeFunctionInArray(ast.NativeFunctionOf(prgrm, constants.OP_APPEND))
 				prgrm.CXAtomicOps[symExprAtomicOpIdx].Operator = opIdx
 
@@ -214,8 +210,6 @@ func sliceLiteralExpressionOf(prgrm *ast.CXProgram, typeCode types.Code, strct *
 				exprAtomicOp.AddOutput(prgrm, outTypeSigIdx)
 
 				result = append(result, expr)
-				// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-				// Now an arena insert, site S1000.
 				opIdx := prgrm.AddNativeFunctionInArray(ast.NativeFunctionOf(prgrm, constants.OP_APPEND))
 				prgrm.CXAtomicOps[symExprAtomicOpIdx].Operator = opIdx
 
@@ -359,9 +353,9 @@ func sliceLiteralStructElement(prgrm *ast.CXProgram, strct *ast.CXStruct, elemen
 		return output
 	}
 	switch {
-	case len(prgrm.CXAtomicOps[element[last].Index].GetOutputs(prgrm)) == 0 && prgrm.GetFunctionFromArray(prgrm.CXAtomicOps[element[last].Index].Operator) == nil:
+	case len(prgrm.CXAtomicOps[element[last].Index].GetOutputs(prgrm)) == 0 && prgrm.CxIrState.CxIrStateFunctionGetOrNil(prgrm.CXAtomicOps[element[last].Index].Operator) == nil:
 		// T{} leaves the declared variable zero.
-	case prgrm.GetFunctionFromArray(prgrm.CXAtomicOps[element[last].Index].Operator) == nil:
+	case prgrm.CxIrState.CxIrStateFunctionGetOrNil(prgrm.CXAtomicOps[element[last].Index].Operator) == nil:
 		// A value: elementName = value, which type checks it.
 		value := prgrm.CXAtomicOps[element[last].Index].GetOutputs(prgrm)
 		result = append(result, element[:last]...)
@@ -738,9 +732,7 @@ func arrayLiteralExpressionOf(prgrm *ast.CXProgram, arraySizes []types.Pointer, 
 		if err != nil {
 			panic(err)
 		}
-		// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-		// Now an arena getter, site S1032.
-		expressionOperator := prgrm.GetFunctionFromArray(expression.Operator)
+		expressionOperator := prgrm.CxIrState.CxIrStateFunctionGetOrNil(expression.Operator)
 
 		if expr.IsArrayLiteral() {
 			expr.ExpressionType = ast.CXEXPR_UNUSED
@@ -792,8 +784,6 @@ func arrayLiteralExpressionOf(prgrm *ast.CXProgram, arraySizes []types.Pointer, 
 
 			if expressionOperator == nil {
 				// then it's a literal
-				// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-				// Now an arena insert, site S1039.
 				opIdx := prgrm.AddNativeFunctionInArray(ast.NativeFunctionOf(prgrm, constants.OP_IDENTITY))
 				prgrm.CXAtomicOps[symExprAtomicOpIdx].Operator = opIdx
 				prgrm.CXAtomicOps[symExprAtomicOpIdx].Inputs = expression.Outputs

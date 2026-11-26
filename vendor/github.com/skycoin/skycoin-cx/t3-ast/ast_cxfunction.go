@@ -9,8 +9,6 @@ import (
 	stringpool "github.com/skycoin/skycoin-cx/t2-cx-core-stringpool"
 )
 
-type CXFunctionIndex int
-
 // IsBuiltIn determines if opcode is not 0
 // True if the function is native to CX, e.g. int32.add()
 func (cxf CXFunction) IsBuiltIn() bool {
@@ -21,25 +19,21 @@ func (cxf CXFunction) IsAtomic() bool {
 	return cxf.AtomicOPCode != 0
 }
 
-// MakeFunction creates an empty function.
-// Later, parameters and contents can be added.
-// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-// Now a constructor, site S0133.
-func MakeFunction(prgrm *CXProgram, name stringpool.StringGid, fileName SourceFileGid, fileLine int) *CXFunction {
-	// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-	// Now a heap literal, site S0134.
-	return &CXFunction{
-		Name:     name,
-		Index:    -1,
-		FileName: fileName,
-		FileLine: fileLine,
-		// OBJMODEL: state.CXStructMng.CXStructAlloc(), phase 4 #336.
-		// Now a heap literal, site S0135.
-		Inputs: &CXStruct{
-			Name: prgrm.CXProgramNameIntern(prgrm.CXProgramNameText(name) + "_Input"),
-		},
-		LocalVariables: []stringpool.StringGid{},
+// MakeFunction allocates an empty function in the program's CXFunctionMng
+// and returns its Gid and the pointer to fill it through. Parameters and
+// contents are added later.
+func MakeFunction(prgrm *CXProgram, name stringpool.StringGid, fileName SourceFileGid, fileLine int) (CXFunctionGid, *CXFunction) {
+	gid, fn := prgrm.CXProgramFunctionAlloc()
+	fn.Name = name
+	fn.FileName = fileName
+	fn.FileLine = fileLine
+	// OBJMODEL: state.CXStructMng.CXStructAlloc(), phase 4 #336.
+	// Now a heap literal, site S0135.
+	fn.Inputs = &CXStruct{
+		Name: prgrm.CXProgramNameIntern(prgrm.CXProgramNameText(name) + "_Input"),
 	}
+	fn.LocalVariables = []stringpool.StringGid{}
+	return gid, fn
 }
 
 // ----------------------------------------------------------------
@@ -211,7 +205,7 @@ func (fn *CXFunction) AddExpression(prgrm *CXProgram, expr *CXExpression) *CXFun
 		}
 
 		cxAtomicOp.Package = fn.Package
-		cxAtomicOp.Function = CXFunctionIndex(fn.Index)
+		cxAtomicOp.Function = prgrm.CXProgramFunctionGid(fn)
 	}
 
 	fn.Expressions = append(fn.Expressions, *expr)
@@ -227,7 +221,7 @@ func (fn *CXFunction) AddExpressionByLineNumber(prgrm *CXProgram, expr *CXExpres
 		panic(err)
 	}
 	cxAtomicOp.Package = fn.Package
-	cxAtomicOp.Function = CXFunctionIndex(fn.Index)
+	cxAtomicOp.Function = prgrm.CXProgramFunctionGid(fn)
 
 	lenExprs := len(fn.Expressions)
 	if lenExprs == line {
@@ -296,10 +290,8 @@ func (fn *CXFunction) RemoveLocalVariableFromArray(name stringpool.StringGid) er
 // OBJMODEL: state.CXExpressionMng.CXExpressionAlloc(), phase 4 #346.
 // Now a constructor, site S0148.
 func MakeAtomicOperatorExpression(prgrm *CXProgram, op *CXNativeFunction) *CXExpression {
-	var opIdx CXFunctionIndex = -1
+	var opIdx CXFunctionGid
 	if op != nil {
-		// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-		// Now an arena insert, site S0149.
 		opIdx = prgrm.AddNativeFunctionInArray(op)
 	}
 

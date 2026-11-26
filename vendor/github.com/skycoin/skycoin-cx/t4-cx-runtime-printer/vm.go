@@ -23,6 +23,11 @@ var printerVmStopMessages = [vm.StopCount]string{
 	vm.StopAddressInvalid: "address outside the stack and data segment",
 }
 
+// PrinterVmStopMessage is what vm prints after the error string for stop.
+func PrinterVmStopMessage(stop vm.Stop) string {
+	return printerVmStopMessages[stop]
+}
+
 // printerVmStopLine returns the file and line of the instruction machine
 // stopped at, "" and 0 when it has none, as GetPreviousCXLine gives them.
 func printerVmStopLine(machine *vm.Machine) (string, int) {
@@ -54,20 +59,16 @@ func PrinterVmErrorPrint(prgrm *ast.CXProgram, machine *vm.Machine, stop vm.Stop
 	fileName, lineNumber := printerVmStopLine(machine)
 	code := int(vm.StopExitCodes[stop])
 	message := printerVmStopMessages[stop]
-	if stop == vm.StopLibraryDisabled {
-		library := image.ImageFuncs[machine.MachineFunction].FuncCode[machine.MachinePc].InstrM
-		message = ast.RuntimeLibraryDisabledMessage(int(library))
-	}
 	fmt.Printf("%s, %s, %v", PrinterErrorHeader(fileName, lineNumber), ast.ErrorString(code), message)
 
 	copy(prgrm.Memory, machine.MachineMemory[:ir.ImageDataEnd(image)])
 	depth := machine.MachineDepth
 	for i := uint32(0); i < depth; i++ {
 		frame := &machine.MachineFrames[i]
-		prgrm.CallStack[i].Operator = &prgrm.CXFunctions[frame.FrameFunction]
+		prgrm.CallStack[i].Operator = prgrm.CXProgramFunctionSlotGid(frame.FrameFunction)
 		prgrm.CallStack[i].FramePointer = types.Pointer(frame.FramePointer)
 	}
-	prgrm.CallStack[depth].Operator = &prgrm.CXFunctions[machine.MachineFunction]
+	prgrm.CallStack[depth].Operator = prgrm.CXProgramFunctionSlotGid(machine.MachineFunction)
 	prgrm.CallStack[depth].FramePointer = types.Pointer(machine.MachineFramePointer)
 	prgrm.CallCounter = types.Pointer(depth)
 	prgrm.Stack.Pointer = types.Pointer(machine.MachineStackPointer)

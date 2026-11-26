@@ -117,15 +117,63 @@ func (cxprogram *CXProgram) GetPackageFromArray(index CXPackageIndex) (*CXPackag
 // ----------------------------------------------------------------
 //
 //	`CXProgram` Function handling
-func (cxprogram *CXProgram) AddFunctionInArray(fn *CXFunction) CXFunctionIndex {
-	// The index of fn after it will be added in the array
-	fn.Index = len(cxprogram.CXFunctions)
 
-	// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-	// Now an arena append, site S0191.
-	cxprogram.CXFunctions = append(cxprogram.CXFunctions, *fn)
+// CXProgramFunctionAlloc allocates a function in the program's CXFunctionMng,
+// sets its Index to the slot and returns its Gid and the pointer to fill it
+// through.
+func (cxprogram *CXProgram) CXProgramFunctionAlloc() (CXFunctionGid, *CXFunction) {
+	manager := &cxprogram.CxIrState.CXFunctionMng
+	gid := manager.CXFunctionAlloc()
+	fn := manager.CXFunctionGet(gid)
+	fn.Index = int(objmodel.GidIndex(int64(gid)))
+	return gid, fn
+}
 
-	return CXFunctionIndex(fn.Index)
+// CXProgramFunctionRelease releases the function gid names.
+func (cxprogram *CXProgram) CXProgramFunctionRelease(gid CXFunctionGid) {
+	cxprogram.CxIrState.CXFunctionMng.CXFunctionRelease(gid)
+}
+
+// CXProgramFunctionSlotCount is the number of slots of the program's
+// CXFunctionMng ever used. A function's slot is below it.
+func (cxprogram *CXProgram) CXProgramFunctionSlotCount() int {
+	return int(cxprogram.CxIrState.CXFunctionMng.CXFunctionMngNext)
+}
+
+// CXProgramFunctionSlotLive returns the function in slot index, or nil for a
+// released slot, for a walk over every function.
+func (cxprogram *CXProgram) CXProgramFunctionSlotLive(index int) *CXFunction {
+	manager := &cxprogram.CxIrState.CXFunctionMng
+	if !manager.CXFunctionMngLive[index] {
+		return nil
+	}
+	return &manager.CXFunctionMngObjects[index]
+}
+
+// CXProgramFunctionSlotGid returns the Gid of the live function in slot
+// index, the slot the lowered image and the vm number functions by.
+func (cxprogram *CXProgram) CXProgramFunctionSlotGid(index uint32) CXFunctionGid {
+	return CXFunctionGid(objmodel.GidCompose(CXFunctionGidTypeTag, cxprogram.CxIrState.CXFunctionMng.CXFunctionMngGenerations[index], index))
+}
+
+// CXProgramFunctionGid returns the Gid of fn, a live function of the program.
+func (cxprogram *CXProgram) CXProgramFunctionGid(fn *CXFunction) CXFunctionGid {
+	return cxprogram.CXProgramFunctionSlotGid(uint32(fn.Index))
+}
+
+// CxIrStateFunctionGetOrNil returns the function gid names, or nil for
+// CXFunctionGidNil, the operator of a declaration.
+func (state *CxIrState) CxIrStateFunctionGetOrNil(gid CXFunctionGid) *CXFunction {
+	if gid == CXFunctionGidNil {
+		return nil
+	}
+	return state.CXFunctionMng.CXFunctionGet(gid)
+}
+
+// CXFunctionGidSlot returns the slot of the function gid names, its number in
+// the lowered image.
+func CXFunctionGidSlot(gid CXFunctionGid) uint32 {
+	return objmodel.GidIndex(int64(gid))
 }
 
 // nativeArgCopy returns a copy of a native argument for one program.
@@ -140,25 +188,25 @@ func nativeArgCopy(arg *CXArgument) *CXArgument {
 	return &cp
 }
 
-func (cxprogram *CXProgram) AddNativeFunctionInArray(fn *CXNativeFunction) CXFunctionIndex {
+// AddNativeFunctionInArray allocates the function a call of the native fn
+// calls, and returns its Gid.
+func (cxprogram *CXProgram) AddNativeFunctionInArray(fn *CXNativeFunction) CXFunctionGid {
 	if fn.AtomicOPCode == constants.OP_LIBRARY_CALL {
 		cxprogram.ProgramLibrariesUsed[fn.LibraryNumber] = true
+	} else if library := constants.OpcodeLibraryOf(fn.AtomicOPCode); library != 0 {
+		cxprogram.ProgramLibrariesUsed[library] = true
 	}
-	// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-	// Now a heap literal, site S0194.
-	fnNative := &CXFunction{
-		Index:                 len(cxprogram.CXFunctions),
-		AtomicOPCode:          fn.AtomicOPCode,
-		LibraryNumber:         fn.LibraryNumber,
-		LibraryFunctionNumber: fn.LibraryFunctionNumber,
-		// OBJMODEL: state.CXStructMng.CXStructAlloc(), phase 4 #336.
-		// Now a heap literal, site S0195.
-		Inputs: &CXStruct{},
-		// OBJMODEL: state.CXStructMng.CXStructAlloc(), phase 4 #336.
-		// Now a heap literal, site S0196.
-		Outputs:        &CXStruct{},
-		LocalVariables: []stringpool.StringGid{},
-	}
+	gid, fnNative := cxprogram.CXProgramFunctionAlloc()
+	fnNative.AtomicOPCode = fn.AtomicOPCode
+	fnNative.LibraryNumber = fn.LibraryNumber
+	fnNative.LibraryFunctionNumber = fn.LibraryFunctionNumber
+	// OBJMODEL: state.CXStructMng.CXStructAlloc(), phase 4 #336.
+	// Now a heap literal, site S0195.
+	fnNative.Inputs = &CXStruct{}
+	// OBJMODEL: state.CXStructMng.CXStructAlloc(), phase 4 #336.
+	// Now a heap literal, site S0196.
+	fnNative.Outputs = &CXStruct{}
+	fnNative.LocalVariables = []stringpool.StringGid{}
 
 	// Add inputs to cx arg array
 	for _, argIn := range fn.Inputs {
@@ -195,26 +243,7 @@ func (cxprogram *CXProgram) AddNativeFunctionInArray(fn *CXNativeFunction) CXFun
 		fnNative.Outputs.Fields = append(fnNative.Outputs.Fields, newFieldIdx)
 	}
 
-	// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-	// Now an arena append, site S0201.
-	cxprogram.CXFunctions = append(cxprogram.CXFunctions, *fnNative)
-
-	return CXFunctionIndex(fnNative.Index)
-}
-
-// VIOLATION STRHOT-232: E, error or assert text, built on a failure branch only, #412.
-func (cxprogram *CXProgram) GetFunctionFromArray(index CXFunctionIndex) *CXFunction {
-	if index == -1 {
-		return nil
-	}
-
-	if int(index) > (len(cxprogram.CXFunctions) - 1) {
-		panic(fmt.Errorf("error: CXFunctions[%d]: index out of bounds", index))
-	}
-
-	// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-	// Now a pointer into an arena, site S0202.
-	return &cxprogram.CXFunctions[index]
+	return gid
 }
 
 // ----------------------------------------------------------------
@@ -712,18 +741,14 @@ func (cxprogram *CXProgram) GetCurrentFunction() (*CXFunction, error) {
 	// Now an arena getter, site S0250.
 	currentPackage, err := cxprogram.GetPackageFromArray(cxprogram.CurrentPackage)
 	if err != nil {
-		// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-		// Now a heap literal, site S0251.
-		return &CXFunction{}, err
+		return nil, err
 	}
 
-	if currentPackage.CurrentFunction == -1 {
+	if currentPackage.CurrentFunction == CXFunctionGidNil {
 		return nil, errors.New("current function is nil")
 	}
 
-	// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-	// Now an arena getter, site S0252.
-	return cxprogram.GetFunctionFromArray(currentPackage.CurrentFunction), nil
+	return cxprogram.CxIrState.CXFunctionMng.CXFunctionGet(currentPackage.CurrentFunction), nil
 
 }
 
@@ -833,4 +858,23 @@ func (cxprogram *CXProgram) PrintProgram() {
 // ProgramStdinInit makes reader the input of read() for the rest of the run.
 func (prgrm *CXProgram) ProgramStdinInit(reader io.Reader) {
 	prgrm.ProgramStdin = bufio.NewReader(reader)
+}
+
+// CXProgramFunctionLiveSlots returns which slots of the program's
+// CXFunctionMng hold a live function, for CXProgramFunctionReleaseNew.
+func (cxprogram *CXProgram) CXProgramFunctionLiveSlots() []bool {
+	manager := &cxprogram.CxIrState.CXFunctionMng
+	return append([]bool(nil), manager.CXFunctionMngLive[:manager.CXFunctionMngNext]...)
+}
+
+// CXProgramFunctionReleaseNew releases every function allocated since
+// liveBefore was taken, the highest slot first, so the next Allocs take the
+// slots back in ascending order.
+func (cxprogram *CXProgram) CXProgramFunctionReleaseNew(liveBefore []bool) {
+	manager := &cxprogram.CxIrState.CXFunctionMng
+	for index := int(manager.CXFunctionMngNext) - 1; index >= 0; index-- {
+		if manager.CXFunctionMngLive[index] && (index >= len(liveBefore) || !liveBefore[index]) {
+			cxprogram.CXProgramFunctionRelease(cxprogram.CXProgramFunctionSlotGid(uint32(index)))
+		}
+	}
 }
