@@ -364,6 +364,24 @@ suite at once with that many runs.
 | `program-test-suite-storage-file-system` | method A of the storage program at 512 to 4096 bytes, the flipped byte, and the direct block tests reported `skipped` (D29) |
 | `program-test-suite-serial-skip-on-phone` | the four serial tests report `skipped` |
 
+## Desktop tests
+
+`desktoptests/` runs the same kinds of checks on a desktop host against the
+published `cx` and not the one the app links. `desktoptests/run-tests.sh`
+takes `CX`, or downloads the release archive of the skycoin-cx version that
+go.mod pins with `desktoptests/release.sh`, which checks it against the
+release's `SHA256SUMS`. Each folder is one test with a `run.sh`.
+
+| Test | Checks |
+| --- | --- |
+| `cx-source-fib15` | fib 0 to 14 from source prints the file of `tests/cx-source-fib15` |
+| `cx-ir-fib15` | the same program built with `cx build`, the IR form, prints the same file with no parser |
+| `cx-stdin-lines` | lines on standard input reach CX `read()` in order |
+| `cx-net-tcp-loopback`, `cx-net-udp-loopback` | the TCP and UDP tests of skycoin-cx, live on loopback and from their replay records |
+| `cx-net-tcp-echo-process`, `cx-net-udp-echo-process` | a CX client of `sys/net` and `net-echo-server` in another process, five lines and 20 datagrams |
+| `forth-cxir-fib15` | `cxforth -cx fib` prints the bytes of the CX source program |
+| `programnetwork-publish-get-subscribe` | one node publishes the fib app over UDP, a thin node gets it and a subscriber fetches it from the have, both verified, and cx runs it |
+
 ## Test programs
 
 Two bundled CX apps test the device and report one result line per test
