@@ -80,21 +80,50 @@ func usage() {
 	os.Exit(2)
 }
 
-// RequestKey is the store key of a request, the hex SHA-256 of its bytes.
-func RequestKey(body []byte) string {
+// RequestHash is the hex SHA-256 of a request's bytes, the tag of the stub's
+// replies.
+func RequestHash(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }
 
+// memoServer answers the model requests of a port. With memo it keeps each
+// reply in db under StoreKey, and in replay it answers from db alone.
+// Without memo it forwards every request and keeps nothing.
 type memoServer struct {
 	db          *bolt.DB
+	memo        bool
 	replay      bool
+	provider    string
+	model       string
 	upstream    string
 	apiKey      string
 	apiVersion  string
 	missMu      sync.Mutex
 	missedKeys  []string
 	stopChannel chan struct{}
+}
+
+// forward sends a request to the provider, with the model of -model when
+// one is set.
+func (s *memoServer) forward(body []byte) (int, []byte, error) {
+	if s.model != "" {
+		var err error
+		if body, err = requestModelSet(body, s.model); err != nil {
+			return 0, nil, err
+		}
+	}
+	return providerForward(s.provider, s.upstream, s.apiKey, s.apiVersion, body)
+}
+
+// keyOf is the store key of a request: its provider, the model it goes to
+// and its bytes.
+func (s *memoServer) keyOf(body []byte) string {
+	model := s.model
+	if model == "" {
+		model = RequestModel(body)
+	}
+	return StoreKey(s.provider, model, body)
 }
 
 func (s *memoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +137,18 @@ func (s *memoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	key := RequestKey(body)
+	if !s.memo {
+		status, response, err := s.forward(body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(response)
+		return
+	}
+	key := s.keyOf(body)
 	status, response, found, err := s.lookup(key)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -178,28 +218,6 @@ func (s *memoServer) store(key string, request []byte, status int, response []by
 	})
 }
 
-func (s *memoServer) forward(body []byte) (int, []byte, error) {
-	if s.upstream == "" {
-		return 0, nil, errors.New("record miss with no -upstream")
-	}
-	req, err := http.NewRequest(http.MethodPost, s.upstream, bytes.NewReader(body))
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", s.apiVersion)
-	if s.apiKey != "" {
-		req.Header.Set("x-api-key", s.apiKey)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	response, err := io.ReadAll(resp.Body)
-	return resp.StatusCode, response, err
-}
-
 // listenAndWrite listens on address and writes the URL of the listener to
 // addressFile, so a runner can pass port 0 and learn the port.
 func listenAndWrite(address, addressFile string) (net.Listener, error) {
@@ -235,38 +253,50 @@ func serveUntilStop(ln net.Listener, handler http.Handler, stop chan struct{}) e
 
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
-	storePath := flags.String("store", "", "bbolt store file")
-	mode := flags.String("mode", "replay", "record or replay")
+	storePath := flags.String("store", "", "bbolt store file, not used with -memo=false")
+	mode := flags.String("mode", "replay", "record or replay, with -memo")
+	memo := flags.Bool("memo", true, "keep each reply in -store and answer from it; false forwards every request live and keeps nothing")
+	provider := flags.String("provider", ProviderAnthropic, "API of -upstream: anthropic (Messages) or openai (chat completions, also Ollama and llama.cpp)")
+	model := flags.String("model", "", "model every request goes to, instead of the one the port names")
 	address := flags.String("listen", "127.0.0.1:0", "listen address")
 	addressFile := flags.String("address-file", "", "file that receives the server URL once it listens")
-	upstream := flags.String("upstream", "", "real backend URL that record mode forwards a miss to, e.g. https://api.anthropic.com/v1/messages")
-	apiKeyEnv := flags.String("api-key-env", "ANTHROPIC_API_KEY", "environment variable holding the upstream API key")
-	apiVersion := flags.String("api-version", "2023-06-01", "anthropic-version header sent upstream")
+	upstream := flags.String("upstream", "", "URL of the provider's API that a live request goes to, e.g. "+ProviderDefaultUpstream[ProviderAnthropic]+" or "+ProviderDefaultUpstream[ProviderOpenAI])
+	apiKeyEnv := flags.String("api-key-env", "ANTHROPIC_API_KEY", "environment variable holding the provider's API key, none for a local server")
+	apiVersion := flags.String("api-version", "2023-06-01", "anthropic-version header sent to the anthropic provider")
 	flags.Parse(args)
-	if *storePath == "" {
-		return errors.New("serve needs -store")
+	if _, known := ProviderDefaultUpstream[*provider]; !known {
+		return fmt.Errorf("unknown provider %q, want %s or %s", *provider, ProviderAnthropic, ProviderOpenAI)
 	}
-	if *mode != "record" && *mode != "replay" {
-		return fmt.Errorf("unknown mode %q", *mode)
-	}
-	replay := *mode == "replay"
-	if replay {
-		if _, err := os.Stat(*storePath); err != nil {
-			return err
-		}
-	}
-	db, err := bolt.Open(*storePath, 0o644, &bolt.Options{Timeout: 5 * time.Second, ReadOnly: replay})
-	if err != nil {
-		return err
-	}
-	defer db.Close()
 	server := &memoServer{
-		db:          db,
-		replay:      replay,
+		memo:        *memo,
+		provider:    *provider,
+		model:       *model,
 		upstream:    *upstream,
 		apiKey:      os.Getenv(*apiKeyEnv),
 		apiVersion:  *apiVersion,
 		stopChannel: make(chan struct{}),
+	}
+	if *memo {
+		if *storePath == "" {
+			return errors.New("serve needs -store, or -memo=false")
+		}
+		if *mode != "record" && *mode != "replay" {
+			return fmt.Errorf("unknown mode %q", *mode)
+		}
+		server.replay = *mode == "replay"
+		if server.replay {
+			if _, err := os.Stat(*storePath); err != nil {
+				return err
+			}
+		}
+		db, err := bolt.Open(*storePath, 0o644, &bolt.Options{Timeout: 5 * time.Second, ReadOnly: server.replay})
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		server.db = db
+	} else if *storePath != "" {
+		return errors.New("-memo=false keeps no store and forwards every request, so it takes no -store")
 	}
 	ln, err := listenAndWrite(*address, *addressFile)
 	if err != nil {
@@ -383,7 +413,7 @@ func StubReplyFor(body []byte) (int, []byte, error) {
 	if len(req.Messages) == 0 {
 		return 0, nil, errors.New("no messages")
 	}
-	tag := RequestKey(body)[:12]
+	tag := RequestHash(body)[:12]
 	reply := stubReply{ID: "msg_stub_" + tag, Type: "message", Role: "assistant", Model: req.Model, StopReason: "end_turn"}
 	last := req.Messages[len(req.Messages)-1]
 
@@ -496,7 +526,9 @@ func marshalStub(status int, reply any) (int, []byte, error) {
 	return status, encoded, err
 }
 
+// stubServer serves the stub in the request and reply format of a provider.
 type stubServer struct {
+	format      string
 	stopChannel chan struct{}
 }
 
@@ -511,7 +543,7 @@ func (s *stubServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	status, reply, err := StubReplyFor(body)
+	status, reply, err := StubReplyInFormat(s.format, body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -525,12 +557,16 @@ func runStub(args []string) error {
 	flags := flag.NewFlagSet("stub", flag.ExitOnError)
 	address := flags.String("listen", "127.0.0.1:0", "listen address")
 	addressFile := flags.String("address-file", "", "file that receives the server URL once it listens")
+	format := flags.String("format", ProviderAnthropic, "request and reply format of the stub: anthropic or openai")
 	flags.Parse(args)
 	ln, err := listenAndWrite(*address, *addressFile)
 	if err != nil {
 		return err
 	}
-	server := &stubServer{stopChannel: make(chan struct{})}
+	if _, known := ProviderDefaultUpstream[*format]; !known {
+		return fmt.Errorf("unknown format %q", *format)
+	}
+	server := &stubServer{format: *format, stopChannel: make(chan struct{})}
 	return serveUntilStop(ln, server, server.stopChannel)
 }
 
@@ -654,6 +690,8 @@ func runImport(args []string) error {
 	flags := flag.NewFlagSet("import", flag.ExitOnError)
 	tapePath := flags.String("tape", "tape.txt", "tape file")
 	storePath := flags.String("store", "store.bolt", "bbolt store file to create")
+	provider := flags.String("provider", ProviderAnthropic, "provider the tape was recorded with, part of the store key")
+	model := flags.String("model", "", "model the tape was recorded with when serve had -model, part of the store key")
 	flags.Parse(args)
 	tape, err := os.ReadFile(*tapePath)
 	if err != nil {
@@ -664,7 +702,7 @@ func runImport(args []string) error {
 		return err
 	}
 	defer db.Close()
-	s := &memoServer{db: db}
+	s := &memoServer{db: db, provider: *provider, model: *model}
 	var request []byte
 	for _, line := range strings.Split(string(tape), "\n") {
 		fields := strings.Split(line, "\t")
@@ -676,7 +714,7 @@ func runImport(args []string) error {
 			if err != nil {
 				return err
 			}
-			if err := s.store(RequestKey(request), request, status, []byte(TapeUnescape(fields[2]))); err != nil {
+			if err := s.store(s.keyOf(request), request, status, []byte(TapeUnescape(fields[2]))); err != nil {
 				return err
 			}
 			request = nil

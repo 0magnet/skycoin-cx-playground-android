@@ -1,16 +1,16 @@
 // Command codingbench runs the micro agents on small coding tasks that they
 // solve with their file tools, through the memoizing model backend.
 //
-//	codingbench -mode record -run DIR [-scripted | -upstream URL]
+//	codingbench -mode record -run DIR [-scripted | -upstream URL] [-provider anthropic|openai] [-model M] [-memo=false]
 //	codingbench -mode replay -run DIR
 //
 // Record runs the CX port of each agent in record mode on each task: the
 // task's files/ become /spiffs, prompt.txt is the inbound message, and
 // model requests go through backendstore serve -mode record, which forwards
-// to -upstream (a real model, key in -api-key-env) or, with -scripted, to
-// the stub with the task's solution.json as tool directives. check.sh then
-// judges the files the agent left. DIR receives each tape and output, and
-// results.md the table.
+// to -upstream (a real model of -provider, key in -api-key-env) or, with
+// -scripted, to the stub with the task's solution.json as tool directives.
+// check.sh then judges the files the agent left. DIR receives each tape and
+// output, and results.md the table.
 //
 // Replay needs no model. It replays each tape with ++apply=1, which rebuilds
 // the files the port wrote, and judges them again. It also runs the
@@ -43,6 +43,9 @@ type config struct {
 	backendstore string
 	upstream     string
 	apiKeyEnv    string
+	provider     string
+	model        string
+	memo         bool
 	scripted     bool
 	tasks        []string
 	agents       []string
@@ -66,7 +69,10 @@ func main() {
 	flag.StringVar(&c.cx, "cx", os.Getenv("CX"), "cx binary")
 	flag.StringVar(&c.backendstore, "backendstore", os.Getenv("BACKENDSTORE"), "backendstore binary")
 	flag.StringVar(&c.upstream, "upstream", "", "model API URL for record, e.g. https://api.anthropic.com/v1/messages")
-	flag.StringVar(&c.apiKeyEnv, "api-key-env", "ANTHROPIC_API_KEY", "environment variable with the upstream API key")
+	flag.StringVar(&c.apiKeyEnv, "api-key-env", "ANTHROPIC_API_KEY", "environment variable with the upstream API key, \"\" for a local server with none")
+	flag.StringVar(&c.provider, "provider", "anthropic", "API of -upstream, anthropic or openai, see backendstore serve; with -scripted the stub speaks it")
+	flag.StringVar(&c.model, "model", "", "model every request goes to, instead of the one the port names")
+	flag.BoolVar(&c.memo, "memo", true, "keep the replies in the backend store; false passes every request through, the tapes still record them")
 	flag.BoolVar(&c.scripted, "scripted", false, "record against the stub with each task's solution.json")
 	taskList := flag.String("tasks", "", "comma separated tasks, default all")
 	agentList := flag.String("agents", strings.Join(agents, ","), "comma separated agents")
@@ -130,7 +136,7 @@ func record(c *config) error {
 	if !c.scripted && c.upstream == "" {
 		return errors.New("record needs -upstream URL for a real model, or -scripted")
 	}
-	if !c.scripted && os.Getenv(c.apiKeyEnv) == "" {
+	if !c.scripted && c.apiKeyEnv != "" && os.Getenv(c.apiKeyEnv) == "" {
 		return fmt.Errorf("record against %s needs the API key in %s", c.upstream, c.apiKeyEnv)
 	}
 	var results []result
@@ -144,9 +150,12 @@ func record(c *config) error {
 			fmt.Fprintf(os.Stderr, "%s %s: %s\n", task, agent, r.solved)
 		}
 	}
-	model := "the scripted stub (solution.json of each task)"
+	model := "the scripted stub (solution.json of each task) in the " + c.provider + " format"
 	if !c.scripted {
-		model = c.upstream
+		model = c.provider + " at " + c.upstream
+		if c.model != "" {
+			model += ", model " + c.model
+		}
 	}
 	table := renderTable(results, false)
 	text := fmt.Sprintf("# Coding benchmark run\n\nModel: %s\nRecorded: %s\n\n%s", model, time.Now().UTC().Format("2006-01-02 15:04 UTC"), table)
@@ -179,14 +188,19 @@ func recordOne(c *config, task, agent string) (result, error) {
 	upstream := c.upstream
 	var stub *server
 	if c.scripted {
-		if stub, err = startServer(c.backendstore, work, "stub.url", "stub"); err != nil {
+		if stub, err = startServer(c.backendstore, work, "stub.url", "stub", "-format", c.provider); err != nil {
 			return r, err
 		}
 		defer stub.stop()
 		upstream = stub.url + "/v1/messages"
 	}
-	store, err := startServer(c.backendstore, work, "store.url", "serve", "-store", "store.bolt", "-mode", "record",
-		"-listen", "127.0.0.1:18080", "-upstream", upstream, "-api-key-env", c.apiKeyEnv)
+	serveArgs := []string{"serve", "-provider", c.provider, "-model", c.model, "-listen", "127.0.0.1:18080", "-upstream", upstream, "-api-key-env", c.apiKeyEnv}
+	if c.memo {
+		serveArgs = append(serveArgs, "-store", "store.bolt", "-mode", "record")
+	} else {
+		serveArgs = append(serveArgs, "-memo=false")
+	}
+	store, err := startServer(c.backendstore, work, "store.url", serveArgs...)
 	if err != nil {
 		return r, err
 	}

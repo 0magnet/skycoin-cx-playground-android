@@ -5,6 +5,8 @@
 #
 # The model is the deterministic stub unless UPSTREAM is set, for example
 # UPSTREAM=https://api.anthropic.com/v1/messages with ANTHROPIC_API_KEY set.
+# PROVIDER=openai speaks OpenAI chat completions to UPSTREAM, or makes the
+# stub speak them, and MODEL sends every request to that model.
 # CX and BACKENDSTORE name the binaries, see ../run-tests.sh.
 set -eu
 test_dir=$(cd "$1" && pwd)
@@ -21,11 +23,12 @@ cd "$run_dir"
 
 upstream=${UPSTREAM:-}
 if [ -z "$upstream" ]; then
-	"$BACKENDSTORE" stub -address-file stub.url &
+	"$BACKENDSTORE" stub -format "${PROVIDER:-anthropic}" -address-file stub.url &
 	while [ ! -s stub.url ]; do sleep 0.1; done
 	upstream="$(cat stub.url)/v1/messages"
 fi
-"$BACKENDSTORE" serve -store store.bolt -mode record -listen 127.0.0.1:18080 -upstream "$upstream" -address-file store.url &
+"$BACKENDSTORE" serve -store store.bolt -mode record -provider "${PROVIDER:-anthropic}" -model "${MODEL:-}" \
+	-listen 127.0.0.1:18080 -upstream "$upstream" -address-file store.url &
 while [ ! -s store.url ]; do sleep 0.1; done
 
 status=0
