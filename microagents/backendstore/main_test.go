@@ -93,7 +93,7 @@ func TestImportFillsStoreFromTape(t *testing.T) {
 	}
 	defer db.Close()
 	s := &memoServer{db: db}
-	status, response, found, err := s.lookup(RequestKey([]byte(`{"a":"\n"}`)))
+	status, response, found, err := s.lookup(StoreKey(ProviderAnthropic, "", []byte(`{"a":"\n"}`)))
 	if err != nil || !found || status != 200 || string(response) != "{\"ok\":1}\n" {
 		t.Fatalf("lookup: %d %q %v %v", status, response, found, err)
 	}

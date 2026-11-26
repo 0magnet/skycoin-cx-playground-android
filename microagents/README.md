@@ -25,6 +25,7 @@ microagents/
   testgen/              writes the generated test folders from tests.table
   testlib/              the script every generated test runs, and its recorder
   codingbench/          the nano agent coding benchmark: tasks, runner, runs
+  providers/            the model provider and memoizing tests
   femtoclaw/, mimiclaw/, zclaw/
     original/           unmodified upstream files
     before/             host harness for the original
@@ -69,7 +70,8 @@ inbound-end
 ## Memoizing backend (R15)
 
 `backendstore serve -store F -mode record|replay` serves the model API over
-HTTP. The key is the hex SHA-256 of the exact request body and the value is
+HTTP. The key is the hex SHA-256 of the provider, the model and the exact
+request body, and the value is
 the exact response body, with its status, in a bbolt file. Record forwards a
 miss to `-upstream` and stores the reply whatever its status, so a replay
 fails where the recording failed. Replay answers a miss with 502,
@@ -90,6 +92,49 @@ and `backendstore head` prints the Date header of a HEAD request for the
 mimiclaw clock. `backendstore listdir` lists the files below a folder as
 the flat SPIFFS namespace, for the `dir-list` wrapper and the harness, and
 `backendstore import` fills a store from the model records of a tape.
+
+## Model providers and memoizing
+
+The ports always send Anthropic Messages requests and read Anthropic
+replies. `serve` chooses the provider a live request goes to, and the ports
+do not change with it.
+
+| `serve` flag | Does |
+| --- | --- |
+| `-provider anthropic` | the default, forwards the request as it is with `x-api-key` and `anthropic-version` |
+| `-provider openai` | translates the request to OpenAI chat completions and the reply back, with `Authorization: Bearer`. Ollama, llama.cpp and other local servers speak this API |
+| `-upstream URL` | the provider's endpoint, for example `https://api.anthropic.com/v1/messages`, `https://api.openai.com/v1/chat/completions` or `http://127.0.0.1:11434/v1/chat/completions` for Ollama |
+| `-model M` | sends every request to model M instead of the one the port names |
+| `-api-key-env NAME` | the variable that holds the key, `ANTHROPIC_API_KEY` by default, `""` for a local server with none |
+| `-memo=false` | turns the store off: every request goes to the provider and nothing is kept. It takes no `-store` and no `-mode` |
+
+In the translation the system prompt becomes the first message, a
+`tool_use` block a tool call, a `tool_result` block a message of role
+`tool`, the tools their function form, and the finish reason and usage
+their Anthropic names. An error reply keeps its status.
+
+The store key includes the provider and the model, so the replies of two
+providers or two models never answer each other. A store recorded with
+`-provider openai` is answered only by `serve -provider openai`, and
+`import -provider` and `-model` fill a store under the same key as the
+recording. The port's tape records the replies whatever the store does,
+so a run with `-memo=false` still replays.
+
+`backendstore stub -format openai` is the stub in the OpenAI format, the
+fake provider of the tests. `codingbench` takes `-provider`, `-model` and
+`-memo` and passes them to `serve`, and with `-scripted` its stub speaks
+the chosen format. `record.sh` takes `PROVIDER` and `MODEL`.
+
+| Test | What passes |
+|---|---|
+| `backendstore` unit tests | each translation, an Anthropic request through OpenAI and back unchanged, record and replay through the stub of each format, distinct keys per provider and model, and `-memo=false` forwarding every request with `-model` |
+| `providers/openai-stub-memo-on` | femtoclaw and zclaw recorded through the OpenAI stub replay twice to the recorded bytes, their tapes have the record kinds of the Anthropic tapes in the same order, and the original agents get every request answered by the OpenAI store |
+| `providers/anthropic-stub-memo-off`, `providers/openai-stub-memo-off` | the same recordings with the store off replay the same way and leave no store |
+
+The switches are on the desktop commands only. The Android app and the
+browser playground replay tapes and never call a model, so they have no
+provider or store to choose. A live model on those platforms is open as a
+decision.
 
 ## Running the tests
 
