@@ -19,7 +19,7 @@ import (
 	globals "github.com/skycoin/skycoin-cx/t2-globals"
 	cxast "github.com/skycoin/skycoin-cx/t3-ast"
 	actions "github.com/skycoin/skycoin-cx/t4-actions"
-	cxnet "github.com/skycoin/skycoin-cx/t5-cxnet"
+	cxnet "github.com/skycoin/skycoin-cx/t4-cxnet"
 	cxos "github.com/skycoin/skycoin-cx/t5-cxos"
 	cxinit "github.com/skycoin/skycoin-cx/t7-init"
 	cxparsing "github.com/skycoin/skycoin-cx/t9-cxparsing"

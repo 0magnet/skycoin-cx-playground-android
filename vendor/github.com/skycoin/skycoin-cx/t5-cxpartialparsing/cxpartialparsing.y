@@ -34,10 +34,8 @@
 		return yyParse(NewLexer(codeBuf))
 	}
 
-	func PreFunctionDeclaration (fnIdx ast.CXFunctionIndex, inputs []*ast.CXArgument, outputs []*ast.CXArgument) {
-                // OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-                // Now an arena getter, site S1393.
-                fn:=actions.AST.GetFunctionFromArray(fnIdx)
+	func PreFunctionDeclaration (fnIdx ast.CXFunctionGid, inputs []*ast.CXArgument, outputs []*ast.CXArgument) {
+                fn:=actions.AST.CxIrState.CXFunctionMng.CXFunctionGet(fnIdx)
 		// adding inputs, outputs
 		for _, inp := range inputs {
 			fn.AddInput(actions.AST,inp)
@@ -84,10 +82,7 @@
 	// Now a pointer at rest, site S1397.
 	expressions []*ast.CXExpression
 
-        // OBJMODEL: CXFunctionGid, the parser value stack lives across Allocs, phase 4 #351.
-        // Now a pointer at rest, site S1398.
-        function *ast.CXFunction
-        functionIndex ast.CXFunctionIndex
+        functionIndex ast.CXFunctionGid
 }
 
 %token  <bool>          BOOLEAN_LITERAL
@@ -107,7 +102,7 @@
                         ASSIGN CASSIGN IMPORT RETURN GOTO GT_OP LT_OP GTEQ_OP LTEQ_OP EQUAL COLON NEW
                         EQUALWORD GTHANWORD LTHANWORD
                         GTHANEQ LTHANEQ UNEQUAL AND OR
-                        ADD_OP SUB_OP MUL_OP DIV_OP MOD_OP REF_OP NEG_OP AFFVAR
+                        ADD_OP SUB_OP MUL_OP DIV_OP MOD_OP REF_OP NEG_OP
                         PLUSPLUS MINUSMINUS REMAINDER LEFTSHIFT RIGHTSHIFT EXP
                         NOT
                         BITXOR_OP BITOR_OP BITCLEAR_OP
@@ -135,7 +130,7 @@
                         /* Debugging */
                         DSTACK DPROGRAM DSTATE
                         /* Affordances */
-                        AFF CAFF TAG INFER VALUE
+                        AFF TAG INFER VALUE
                         /* Pointers */
                         ADDR
 
@@ -314,9 +309,7 @@ function_header:
                 FUNC IDENTIFIER
                 {
 			if pkg, err := Program.GetCurrentPackage(); err == nil {
-				// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-				// Now a constructor call, site S1400.
-				fn := ast.MakeFunction(Program, Program.CXProgramNameIntern($2), CurrentFile, $<line>2)
+				_, fn := ast.MakeFunction(Program, Program.CXProgramNameIntern($2), CurrentFile, $<line>2)
 				fn.FileColumn = $<column>2
 				_,fnIdx:=pkg.AddFunction(Program,fn)
                                 pkg.CurrentFunction=fnIdx
@@ -334,14 +327,10 @@ function_header:
 			methodName := Program.CXProgramNameIntern($5)
 
 			if pkg, err := Program.GetCurrentPackage(); err == nil {
-				// OBJMODEL: state.CXFunctionMng.CXFunctionAlloc(), phase 4 #351.
-				// Now a constructor call, site S1401.
-				fn := ast.MakeFunction(Program, Program.CXProgramMethodNameIntern(receiverName, methodName), CurrentFile, $<line>5)
+				_, fn := ast.MakeFunction(Program, Program.CXProgramMethodNameIntern(receiverName, methodName), CurrentFile, $<line>5)
 				fn.FileColumn = $<column>5
 				_,fnIdx:=pkg.AddMethod(Program,fn,receiverName,methodName)
-                                // OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-                                // Now an arena getter, site S1402.
-                                newFn:=Program.GetFunctionFromArray(fnIdx)
+                                newFn:=Program.CxIrState.CXFunctionMng.CXFunctionGet(fnIdx)
                                 newFn.AddInput(Program,receiver[0])
                                 
                                 pkg.CurrentFunction=fnIdx
@@ -684,47 +673,20 @@ compound_literal_expression:
 
 
 
-/* infer_action_arg: */
-/*                 MUL_OP GT_OP assignment_expression */
-/*         |       MUL_OP GT_OP MUL_OP */
-/*         ; */
-
-infer_action_arg:
-                IDENTIFIER
-        |       INT_LITERAL
-	|	type_specifier PERIOD IDENTIFIER
+affordance_clause:
+                IDENTIFIER LPAREN IDENTIFIER RPAREN
+        |       VAR LPAREN IDENTIFIER RPAREN
         ;
 
-infer_action:
-                IDENTIFIER LPAREN infer_action_arg COMMA IDENTIFIER RPAREN
-	|	IDENTIFIER LPAREN infer_action_arg RPAREN
-	|	IDENTIFIER LPAREN infer_action RPAREN
-	|	IDENTIFIER LPAREN infer_action COMMA infer_action RPAREN
+affordance_clauses:
+        |       affordance_clauses affordance_clause
+        |       affordance_clauses SEMICOLON
         ;
-
-infer_actions:
-                infer_action SEMICOLON
-        |       infer_actions infer_action SEMICOLON
-                ;
-
-/* infer_target: */
-/*                 IDENTIFIER LPAREN IDENTIFIER RPAREN SEMICOLON */
-/*         ; */
-
-/* infer_targets: */
-/*                 infer_target */
-/*         |       infer_targets infer_target */
-/*         ; */
-
-infer_clauses:
-        |       infer_actions
-        /* |       infer_targets */
-                ;
 
 primary_expression:
                 IDENTIFIER
         /* |       IDENTIFIER LBRACE struct_literal_fields RBRACE */
-        |       INFER LBRACE infer_clauses RBRACE
+        |       INFER LBRACE affordance_clauses RBRACE
         |       STRING_LITERAL
         |       BOOLEAN_LITERAL
         |       BYTE_LITERAL

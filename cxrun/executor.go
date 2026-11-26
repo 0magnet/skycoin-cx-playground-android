@@ -13,8 +13,9 @@ import (
 	vm "github.com/skycoin/skycoin-cx/t3-cx-runtime-vm"
 	actions "github.com/skycoin/skycoin-cx/t4-actions"
 	lower "github.com/skycoin/skycoin-cx/t4-cx-compiler-lower"
-	execute "github.com/skycoin/skycoin-cx/t4-execute"
 	printer "github.com/skycoin/skycoin-cx/t4-cx-runtime-printer"
+	execute "github.com/skycoin/skycoin-cx/t4-execute"
+	core "github.com/skycoin/skycoin-cx/t5-cx-runtime-core"
 )
 
 // Executor names the loop a program runs on, as the cx --executor flag does.
@@ -38,6 +39,14 @@ const vmOutputSize = 64 << 10
 // runCompiledOn runs the parsed program on executor and returns the time the
 // run took, compile time excluded.
 func runCompiledOn(executor Executor, args []string) (time.Duration, error) {
+	// The loader refuses a library opcode the run does not enable, as
+	// skycoin-cx core.ExecutorRun does, since the run loops no longer check
+	// (decision D119).
+	core.CoreLibrariesEnabledResolve(actions.AST)
+	if code := core.CoreOperationRefused(actions.AST); code != 0 {
+		fmt.Println(core.CoreOperationRefusalLine(actions.AST, code))
+		return 0, ErrRuntime
+	}
 	switch executor {
 	case ExecutorOld, "":
 		started := time.Now()
@@ -129,5 +138,5 @@ func vmFailureText(prgrm *cxast.CXProgram, failure lower.Failure) string {
 			text += " " + row.Name
 		}
 	}
-	return text + " in " + prgrm.CXProgramNameText(prgrm.CXFunctions[failure.FailureFunction].Name)
+	return text + " in " + prgrm.CXProgramNameText(prgrm.CxIrState.CXFunctionMng.CXFunctionGet(prgrm.CXProgramFunctionSlotGid(failure.FailureFunction)).Name)
 }

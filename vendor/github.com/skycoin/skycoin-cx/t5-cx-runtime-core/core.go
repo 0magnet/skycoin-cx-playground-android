@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/skycoin/skycoin-cx/t0-cx-core-assert"
+	"github.com/skycoin/skycoin-cx/t0-types"
 	"github.com/skycoin/skycoin-cx/t1-constants"
 	stringpool "github.com/skycoin/skycoin-cx/t2-cx-core-stringpool"
 	// GCREACH: t3-ast owns the heap and the GC roots. core builds the program and
@@ -21,7 +22,7 @@ import (
 // CoreRegister adds the native packages of the core to prgrm, registers the
 // system libraries that libraryRegisters register and sets the opcode switch
 // to CoreOpcodeDispatch. It leaves out every other library (t5-cxos,
-// t5-cxnet, t5-cipher) and the opcodes that need a module outside the
+// t4-cxnet, t4-cipher) and the opcodes that need a module outside the
 // standard library (t6-cxfx).
 func CoreRegister(prgrm *ast.CXProgram, libraryRegisters ...func(prgrm *ast.CXProgram)) {
 	ast.OpcodeDispatch = CoreOpcodeDispatch
@@ -60,9 +61,12 @@ func CoreOpcodeLinked(code int) bool {
 func CoreOpcodesUsed(prgrm *ast.CXProgram) []int {
 	seen := map[int]bool{}
 	var used []int
-	for index := range prgrm.CXFunctions {
-		code := prgrm.CXFunctions[index].AtomicOPCode
-		if code != 0 && !seen[code] {
+	for index := 0; index < prgrm.CXProgramFunctionSlotCount(); index++ {
+		fn := prgrm.CXProgramFunctionSlotLive(index)
+		if fn == nil {
+			continue
+		}
+		if code := fn.AtomicOPCode; code != 0 && !seen[code] {
 			seen[code] = true
 			used = append(used, code)
 		}
@@ -93,25 +97,66 @@ func CoreOpcodeName(code int) string {
 
 // CoreLibrariesEnabledResolve applies constants.LibraryPolicyEnabledWhenImported
 // to prgrm: when it is true, every library the program calls is enabled.
+// Then every opcode of an enabled library joins
+// ProgramOperationsEnabled, the set the loader checks (decision D119).
 func CoreLibrariesEnabledResolve(prgrm *ast.CXProgram) {
-	if !constants.LibraryPolicyEnabledWhenImported {
-		return
-	}
 	for library, used := range prgrm.ProgramLibrariesUsed {
-		if used {
+		if used && constants.LibraryPolicyEnabledWhenImported {
 			prgrm.ProgramLibrariesEnabled[library] = true
+		}
+		if prgrm.ProgramLibrariesEnabled[library] {
+			prgrm.ProgramOperationsEnabled.OpcodeSetLibraryAdd(library)
 		}
 	}
 }
 
-// CoreLibrariesMissing returns the names of the libraries enabled for prgrm
-// that this binary does not link, in number order.
-func CoreLibrariesMissing(prgrm *ast.CXProgram) []string {
+// CoreLibrariesActive returns the libraries prgrm may call: those enabled
+// whole and those with an enabled operation.
+func CoreLibrariesActive(prgrm *ast.CXProgram) [constants.LibraryCount]bool {
+	var active [constants.LibraryCount]bool
+	for library := range active {
+		active[library] = prgrm.ProgramLibrariesEnabled[library] || prgrm.ProgramOperationsEnabled.OpcodeSetLibraryAny(library)
+	}
+	return active
+}
+
+// CoreLibrariesMissing returns the names of the libraries active for prgrm
+// that this binary does not link, in number order. opcodesLinked marks the
+// libraries whose functions are opcodes that the binary links, by its build
+// tags (decision D119), and the other libraries are linked when registered.
+func CoreLibrariesMissing(prgrm *ast.CXProgram, opcodesLinked [constants.LibraryCount]bool) []string {
 	var missing [constants.LibraryCount]bool
-	for library, enabled := range prgrm.ProgramLibrariesEnabled {
-		missing[library] = enabled && !ast.LibraryLinked(library)
+	for library, active := range CoreLibrariesActive(prgrm) {
+		missing[library] = active && !ast.LibraryLinked(library) && !opcodesLinked[library]
 	}
 	return CoreLibraryNames(missing)
+}
+
+// CoreOperationRefused returns the first library opcode, in number order,
+// that prgrm uses and its run does not enable, and 0 when there is none.
+// The loader refuses such a program before it runs, so the run loop never
+// checks a library or an operation (decision D119).
+func CoreOperationRefused(prgrm *ast.CXProgram) int {
+	for _, code := range CoreOpcodesUsed(prgrm) {
+		if constants.OpcodeLibraryOf(code) != 0 && !prgrm.ProgramOperationsEnabled.OpcodeSetContains(code) {
+			return code
+		}
+	}
+	return 0
+}
+
+// CoreOperationRefusalLine is the line a program refused for opcode code
+// prints, the runtime error CX_RUNTIME_LIBRARY_DISABLED without a source
+// position. It names the library when the run enables nothing of it, and
+// the operation otherwise.
+func CoreOperationRefusalLine(prgrm *ast.CXProgram, code int) string {
+	library := constants.OpcodeLibraryOf(code)
+	message := ast.RuntimeLibraryDisabledMessage(library)
+	if prgrm.ProgramOperationsEnabled.OpcodeSetLibraryAny(library) {
+		name := constants.LibraryOperationName(code)
+		message = "operation " + name + " is not enabled, enable it with --enable=" + name
+	}
+	return "error: " + ast.ErrorString(types.CX_RUNTIME_LIBRARY_DISABLED) + ", " + message
 }
 
 // CoreLibraryNames returns the names of the libraries libraries marks, in

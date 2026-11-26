@@ -1,14 +1,14 @@
 package init
 
 import (
-	"github.com/skycoin/skycoin-cx/t1-constants" // thin: only CALLSTACK_SIZE, NULL_HEAP_ADDRESS_OFFSET, OpcodeGroupLinked, STACK_SIZE; no depth gain
+	"github.com/skycoin/skycoin-cx/t1-constants" // thin: only CALLSTACK_SIZE, NULL_HEAP_ADDRESS_OFFSET, STACK_SIZE; no depth gain
 	stringpool "github.com/skycoin/skycoin-cx/t2-cx-core-stringpool"
 	"github.com/skycoin/skycoin-cx/t3-ast"
+	"github.com/skycoin/skycoin-cx/t4-cipher"               // thin: only RegisterPackage, CipherOpcodeDispatch; registration list and opcode switch, keep
 	"github.com/skycoin/skycoin-cx/t4-cx-runtime-printer"   // thin: only PrinterCompileErrorsRegister; registration list, keep
-	"github.com/skycoin/skycoin-cx/t5-cipher"               // thin: only RegisterPackage; registration list, keep
+	"github.com/skycoin/skycoin-cx/t4-cxnet"                // thin: only RegisterPackage, NetOpcodeDispatch; registration list and opcode switch, keep
 	core "github.com/skycoin/skycoin-cx/t5-cx-runtime-core" // thin: only CoreOpcodeDispatch; the opcode switch, keep
-	"github.com/skycoin/skycoin-cx/t5-cxnet"                // thin: only RegisterPackage; registration list, keep
-	"github.com/skycoin/skycoin-cx/t5-cxos"                 // thin: only RegisterPackage; registration list, keep
+	"github.com/skycoin/skycoin-cx/t5-cxos"                 // thin: only RegisterPackage, FileOpcodeDispatch; registration list and opcode switch, keep
 	"github.com/skycoin/skycoin-cx/t6-cxfx"                 // thin: only CxfxOpcodeDispatch; the opcode switch, keep
 
 	// "github.com/skycoin/cx/cx/packages/http"
@@ -19,10 +19,7 @@ import (
 // RegisterPackages adds the native packages to prgrm, registers the system
 // libraries and sets the opcode switch of cx.
 func RegisterPackages(prgrm *ast.CXProgram) {
-	ast.OpcodeDispatch = core.CoreOpcodeDispatch
-	if constants.OpcodeGroupLinked(constants.OpcodeGroupCxfx) {
-		ast.OpcodeDispatch = OpcodeDispatch
-	}
+	ast.OpcodeDispatch = OpcodeDispatch
 	cipher.RegisterPackage(prgrm)
 	cxos.RegisterPackage(prgrm)
 	printer.PrinterCompileErrorsRegister(prgrm)
@@ -42,10 +39,7 @@ func MakeProgram() *ast.CXProgram {
 	// OBJMODEL: state.CXProgramMng.CXProgramAlloc(), phase 4 #371.
 	// Now a heap literal, site S1461.
 	newPrgrm := &ast.CXProgram{
-		Packages: make(map[stringpool.StringGid]ast.CXPackageIndex, 0),
-		// OBJMODEL: state.CXFunctionMng (manager storage) or []CXFunctionGid, phase 4 #351.
-		// Now a slice of objects, site S1462.
-		CXFunctions:    make([]ast.CXFunction, 0),
+		Packages:       make(map[stringpool.StringGid]ast.CXPackageIndex, 0),
 		CurrentPackage: -1,
 		// OBJMODEL: state.CXCallMng (manager storage) or []CXCallGid, phase 4 #366.
 		// Now a slice of objects, site S1463.
@@ -69,8 +63,9 @@ func MakeProgram() *ast.CXProgram {
 	return newPrgrm
 }
 
-// OpcodeDispatch is the opcode switch of cx, the core switch and then the
-// cxfx switch, which reports false in a build without the cxfx tag.
+// OpcodeDispatch is the opcode switch of cx: the core switch, then the
+// switches of the cipher, net and file libraries and of cxfx, each of which reports false in
+// a build whose tags leave it out.
 func OpcodeDispatch(prgrm *ast.CXProgram, code int, inputs []ast.CXValue, outputs []ast.CXValue) bool {
-	return core.CoreOpcodeDispatch(prgrm, code, inputs, outputs) || cxfx.CxfxOpcodeDispatch(prgrm, code, inputs, outputs)
+	return core.CoreOpcodeDispatch(prgrm, code, inputs, outputs) || cipher.CipherOpcodeDispatch(prgrm, code, inputs, outputs) || cxnet.NetOpcodeDispatch(prgrm, code, inputs, outputs) || cxos.FileOpcodeDispatch(prgrm, code, inputs, outputs) || cxfx.CxfxOpcodeDispatch(prgrm, code, inputs, outputs)
 }

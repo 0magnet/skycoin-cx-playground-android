@@ -99,9 +99,7 @@ func buildStrFunctions(prgrm *CXProgram, pkg *CXPackage, ast1 *string) {
 	// declaration order, the order of their indexes.
 	var j int
 	for _, fnIdx := range slices.Sorted(maps.Values(pkg.Functions)) {
-		// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-		// Now an arena getter, site S0479.
-		fn := prgrm.GetFunctionFromArray(fnIdx)
+		fn := prgrm.CxIrState.CXFunctionMng.CXFunctionGet(fnIdx)
 
 		if fn.Name == prgrm.CxIrState.CxIrStateNameSysInit {
 			continue
@@ -133,9 +131,7 @@ func buildStrFunctions(prgrm *CXProgram, pkg *CXPackage, ast1 *string) {
 				panic(err)
 			}
 
-			// OBJMODEL: state.CXFunctionMng.CXFunctionGet(gid), phase 5 #352.
-			// Now an arena getter, site S0481.
-			cxAtomicOpOperator := prgrm.GetFunctionFromArray(cxAtomicOp.Operator)
+			cxAtomicOpOperator := prgrm.CxIrState.CxIrStateFunctionGetOrNil(cxAtomicOp.Operator)
 			// Adding label in case a `goto` statement was used for the expression.
 			if cxAtomicOp.Label != stringpool.StringGidNil {
 				lbl = " <<" + prgrm.CXProgramNameText(cxAtomicOp.Label) + ">>"
@@ -613,24 +609,6 @@ func SignatureStringOfStruct(prgrm *CXProgram, s *CXStruct) string {
 	}
 
 	return fmt.Sprintf("%s struct {%s }", prgrm.CXProgramNameText(s.Name), fields)
-}
-
-// GetArgSizeFromTypeName ...
-func GetArgSizeFromTypeName(typeName string) int {
-	switch typeName {
-	case "bool", "i8", "ui8":
-		return 1
-	case "i16", "ui16":
-		return 2
-	case "str", "i32", "ui32", "f32", "aff":
-		return 4
-	case "i64", "ui64", "f64":
-		return 8
-	default:
-		return 4
-		// return -1
-		// panic(CX_INTERNAL_ERROR)
-	}
 }
 
 // ArgumentFormattedType is the CX spelling of the type of arg.

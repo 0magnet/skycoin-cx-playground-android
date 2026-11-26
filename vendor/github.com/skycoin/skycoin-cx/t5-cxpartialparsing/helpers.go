@@ -69,7 +69,6 @@ func (lval *yySymType) scancopy(tok *yySymType) {
 	lval.expressions = tok.expressions
 	lval.f32 = tok.f32
 	lval.f64 = tok.f64
-	lval.function = tok.function
 	lval.i = tok.i
 	lval.i16 = tok.i16
 	lval.i32 = tok.i32
@@ -148,7 +147,6 @@ var tokenNames = map[int]string{
 	MOD_OP:          "MOD_OP",
 	REF_OP:          "REF_OP",
 	NEG_OP:          "NEG_OP",
-	AFFVAR:          "AFFVAR",
 	PLUSPLUS:        "PLUSPLUS",
 	MINUSMINUS:      "MINUSMINUS",
 	REMAINDER:       "REMAINDER",
@@ -238,7 +236,6 @@ var tokenNames = map[int]string{
 	DSTATE:   "DSTATE",
 	// Affordances
 	AFF:   "AFF",
-	CAFF:  "CAFF",
 	TAG:   "TAG",
 	INFER: "INFER",
 	VALUE: "VALUE",

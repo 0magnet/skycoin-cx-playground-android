@@ -79,7 +79,8 @@ type Report struct {
 	LibraryCalls []LibraryCall
 	// NetworkCalls counts the app.NetDial calls, and UDP, TCP and
 	// NetworkUnknown tell their network: "udp", "tcp", or a name that is
-	// not a constant. A call of the net library counts as TCP.
+	// not a constant. A net library call of a TCP or UDP function counts as
+	// that network, and the deprecated library call of the net library as TCP.
 	NetworkCalls   int
 	UDP            bool
 	TCP            bool
@@ -191,9 +192,9 @@ func (r *Report) walk(prgrm *cxast.CXProgram) {
 	}
 	sort.Strings(r.Imports)
 
-	for i := range prgrm.CXFunctions {
-		fn := &prgrm.CXFunctions[i]
-		if fn.AtomicOPCode != 0 || len(fn.Expressions) == 0 {
+	for i := 0; i < prgrm.CXProgramFunctionSlotCount(); i++ {
+		fn := prgrm.CXProgramFunctionSlotLive(i)
+		if fn == nil || fn.AtomicOPCode != 0 || len(fn.Expressions) == 0 {
 			continue
 		}
 		r.Functions++
@@ -207,15 +208,15 @@ func (r *Report) walk(prgrm *cxast.CXProgram) {
 				r.IRProblems = append(r.IRProblems, fmt.Sprintf("%s: %v", fnName, err))
 				continue
 			}
-			if op.Operator == -1 {
+			if op.Operator == cxast.CXFunctionGidNil {
 				continue
 			}
 			r.Operations++
-			if int(op.Operator) < 0 || int(op.Operator) >= len(prgrm.CXFunctions) {
-				r.IRProblems = append(r.IRProblems, fmt.Sprintf("%s calls missing function %d", fnName, op.Operator))
+			callee := programFunctionLive(prgrm, op.Operator)
+			if callee == nil {
+				r.IRProblems = append(r.IRProblems, fmt.Sprintf("%s calls missing function %d", fnName, cxast.CXFunctionGidSlot(op.Operator)))
 				continue
 			}
-			callee := prgrm.GetFunctionFromArray(op.Operator)
 			code := callee.AtomicOPCode
 			switch {
 			case code == 0:
@@ -230,6 +231,17 @@ func (r *Report) walk(prgrm *cxast.CXProgram) {
 				calls[[2]string{constants.LibraryNameOf(callee.LibraryNumber), row.Name}]++
 				if callee.LibraryNumber == constants.LibraryNumberNet {
 					r.TCP = true
+				}
+			case code < cxrun.AppOpcodeBase && constants.OpcodeLibraryOf(code) != 0:
+				// Each system library function is its own opcode since
+				// skycoin-cx 2611250004 (decision D119).
+				library := constants.OpcodeLibraryOf(code)
+				r.OpcodeCounts[OpcodeSetLibrary]++
+				name := constants.OpcodeNameOf(code)
+				calls[[2]string{constants.LibraryNameOf(library), name}]++
+				if library == constants.LibraryNumberNet {
+					r.TCP = r.TCP || strings.Contains(name, "TCP")
+					r.UDP = r.UDP || strings.Contains(name, "UDP")
 				}
 			case code >= cxrun.AppOpcodeBase:
 				name := cxast.NativeNames.NativeNameIndexCodeText(code)
@@ -416,4 +428,14 @@ func listOrNoneSep(items []string, sep string) string {
 		return "none"
 	}
 	return strings.Join(items, sep)
+}
+
+// programFunctionLive returns the live function gid names, or nil when gid
+// names no live function, where CXFunctionGet would stop the program.
+func programFunctionLive(prgrm *cxast.CXProgram, gid cxast.CXFunctionGid) *cxast.CXFunction {
+	slot := cxast.CXFunctionGidSlot(gid)
+	if int(slot) >= prgrm.CXProgramFunctionSlotCount() || prgrm.CXProgramFunctionSlotLive(int(slot)) == nil || prgrm.CXProgramFunctionSlotGid(slot) != gid {
+		return nil
+	}
+	return prgrm.CXProgramFunctionSlotLive(int(slot))
 }
