@@ -1,0 +1,6 @@
+line 1 echoed
+line 2 echoed
+line 3 echoed
+line 4 echoed
+line 5 echoed
+received 15 bytes

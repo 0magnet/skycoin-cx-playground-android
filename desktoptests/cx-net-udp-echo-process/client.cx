@@ -1,0 +1,45 @@
+// A UDP client that sends 20 datagrams of four bytes, one at a time, to the
+// echo server on 127.0.0.1:47302 and waits for each echo, through the
+// batched net library.
+
+package main
+
+import "sys/net"
+
+var datagram [16]ui8
+
+func main() {
+	global datagram
+	var conn i32 = net.UDPDial("127.0.0.1", 47302)
+	var count i32
+	var handle i32
+	var trigger i32
+	var message i32
+	var detail i32
+	var length i32
+	var queued i32
+	var echoed i32
+	var updates i32
+	var i i32
+	for echoed < 20 && updates < 500 {
+		count = net.Update(100)
+		updates++
+		for i = 0; i < count; i++ {
+			handle, trigger, message, detail = net.ReadyNext()
+			if trigger == net.TriggerData {
+				length = net.Read(conn, message, datagram, 0)
+				printf("datagram %d echoed, %d bytes, first %d\n", echoed, length, ui8.i32(datagram[0]))
+				echoed++
+			}
+			if (trigger == net.TriggerConnected || trigger == net.TriggerData) && echoed < 20 {
+				datagram[0] = i32.ui8(65 + echoed)
+				queued = net.Write(conn, datagram, 4)
+			}
+		}
+	}
+	printf("%d of 20 datagrams echoed\n", echoed)
+	var closed bool = net.Close(conn)
+	if closed == false {
+		printf("close failed\n")
+	}
+}

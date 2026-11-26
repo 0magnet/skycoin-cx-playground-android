@@ -1,0 +1,21 @@
+datagram 0 echoed, 4 bytes, first 65
+datagram 1 echoed, 4 bytes, first 66
+datagram 2 echoed, 4 bytes, first 67
+datagram 3 echoed, 4 bytes, first 68
+datagram 4 echoed, 4 bytes, first 69
+datagram 5 echoed, 4 bytes, first 70
+datagram 6 echoed, 4 bytes, first 71
+datagram 7 echoed, 4 bytes, first 72
+datagram 8 echoed, 4 bytes, first 73
+datagram 9 echoed, 4 bytes, first 74
+datagram 10 echoed, 4 bytes, first 75
+datagram 11 echoed, 4 bytes, first 76
+datagram 12 echoed, 4 bytes, first 77
+datagram 13 echoed, 4 bytes, first 78
+datagram 14 echoed, 4 bytes, first 79
+datagram 15 echoed, 4 bytes, first 80
+datagram 16 echoed, 4 bytes, first 81
+datagram 17 echoed, 4 bytes, first 82
+datagram 18 echoed, 4 bytes, first 83
+datagram 19 echoed, 4 bytes, first 84
+20 of 20 datagrams echoed
